@@ -16,7 +16,7 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path.cwd()  # run from the repo root under review
 REG = ROOT / "regulation"
 errors: list[str] = []
 warnings: list[str] = []
@@ -28,7 +28,11 @@ NORMATIVE = re.compile(r"\b(shall|must|is required to|are required to)\b", re.I)
 ASPIRATIONAL = re.compile(r"\b(should|will endeavour|strives? to|aims? to)\b", re.I)
 
 for f in targets:
-    text = f.read_text(encoding="utf-8")
+    try:
+        text = f.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        warnings.append(f"{f.relative_to(ROOT)}  not valid UTF-8, skipped")
+        continue
     rel = f.relative_to(ROOT)
     for i, line in enumerate(text.splitlines(), 1):
         if "—" in line:

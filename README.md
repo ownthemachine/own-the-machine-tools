@@ -1,6 +1,6 @@
 # own-the-machine-tools
 
-The review machinery for the [own-the-machine](https://github.com/thetwit4u/own-the-machine)
+The review machinery for the [own-the-machine](https://github.com/ownthemachine/own-the-machine)
 draft EU Regulation: the adversarial gate runner, the six gate prompts and
 the mechanical linter. Split out so the law repository stays a civic
 artefact (text, evidence, governance and the ledger of its own evolution)

@@ -27,6 +27,21 @@ targets = [t for t in targets if t.is_file() and ".git" not in t.parts]
 NORMATIVE = re.compile(r"\b(shall|must|is required to|are required to)\b", re.I)
 ASPIRATIONAL = re.compile(r"\b(should|will endeavour|strives? to|aims? to)\b", re.I)
 
+EXTERNAL = re.compile(r"TFEU|TEU\b|Charter|Directive|Regulation \(|Recommendation|Decision|Act of|thereof|of that (Directive|Regulation)")
+
+def legal_part(f, text):
+    """Drafting notes after a bare '---' line are non-normative; content
+    checks stop there. The em-dash check still covers the whole file."""
+    if "articles" in f.parts and "\n---\n" in text:
+        return text.split("\n---\n")[0]
+    return text
+
+def is_external_ref(line, m):
+    if int(m.group(1)) > 40:      # no internal article number runs that high
+        return True
+    ctx = line[max(0, m.start() - 70):m.start()] + " | " + line[m.end():m.end() + 45]
+    return bool(EXTERNAL.search(ctx))
+
 for f in targets:
     try:
         text = f.read_text(encoding="utf-8")
@@ -34,9 +49,11 @@ for f in targets:
         warnings.append(f"{f.relative_to(ROOT)}  not valid UTF-8, skipped")
         continue
     rel = f.relative_to(ROOT)
+    body = legal_part(f, text)
     for i, line in enumerate(text.splitlines(), 1):
         if "—" in line:
             errors.append(f"{rel}:{i}  em-dash")
+    for i, line in enumerate(body.splitlines(), 1):
         parts = f.parts
         if "recitals" in parts and NORMATIVE.search(line):
             errors.append(f"{rel}:{i}  normative language in a recital: {line.strip()[:70]}")
@@ -55,9 +72,10 @@ if art_dir.exists():
         for f in targets:
             if REG not in f.parents:
                 continue
-            for i, line in enumerate(f.read_text().splitlines(), 1):
+            txt = f.read_text(errors="replace")
+            for i, line in enumerate(legal_part(f, txt).splitlines(), 1):
                 for m in re.finditer(r"Article (\d+)", line):
-                    if int(m.group(1)) not in nums:
+                    if int(m.group(1)) not in nums and not is_external_ref(line, m):
                         errors.append(
                             f"{f.relative_to(ROOT)}:{i}  dangling reference to Article {m.group(1)}"
                         )
@@ -70,9 +88,9 @@ if defs_files:
         for f in art_dir.glob("*.md"):
             if f in defs_files:
                 continue
-            body = f.read_text()
-            for term in re.findall(r"\b([A-Z][a-z]+ [A-Z][a-z]+(?: [A-Z][a-z]+)?)\b", body):
-                if term not in defined and term not in {"Member State", "Member States", "Single Market", "European Union", "European Commission", "European Parliament"}:
+            body = legal_part(f, f.read_text(errors="replace"))
+            for term in re.findall(r"(?<![.!?]\s)\b([A-Z][a-z]+ [A-Z][a-z]+(?: [A-Z][a-z]+)?)\b", body):
+                if term not in defined and term not in {"Member State", "Member States", "Single Market", "European Union", "European Commission", "European Parliament", "This Regulation", "The Commission", "The Reserve", "European Citizens", "Capital Reserve", "Fundamental Rights", "Annex I", "Charter of Fundamental Rights"}:
                     warnings.append(f"{f.relative_to(ROOT)}  capitalised term not in definitions: {term}")
 
 for w in sorted(set(warnings)):

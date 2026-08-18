@@ -22,7 +22,8 @@ errors: list[str] = []
 warnings: list[str] = []
 
 targets = [pathlib.Path(a) for a in sys.argv[1:]] or list(ROOT.rglob("*.md"))
-targets = [t for t in targets if t.is_file() and ".git" not in t.parts]
+targets = [t for t in targets if t.is_file() and ".git" not in t.parts
+           and "reviews" not in t.parts]  # verbatim third-party output, never edited
 
 NORMATIVE = re.compile(r"\b(shall|must|is required to|are required to)\b", re.I)
 ASPIRATIONAL = re.compile(r"\b(should|will endeavour|strives? to|aims? to)\b", re.I)

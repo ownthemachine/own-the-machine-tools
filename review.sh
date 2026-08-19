@@ -29,13 +29,13 @@ if [[ "$HTTP" == "429" || "$HTTP" =~ ^5 || "$HTTP" == "000" ]]; then
 fi
 [[ "$HTTP" == "200" ]] || { echo "OpenRouter HTTP $HTTP" >&2; head -c 400 "$RESP" >&2; exit 1; }
 python3 - "$RESP" "$OUT" "$MODEL" "$PROMPT" <<'PY'
-import json, sys, datetime
+import json, sys, os, datetime
 r = json.load(open(sys.argv[1])); txt = r["choices"][0]["message"]["content"]
 u = r.get("usage", {})
 hdr = (f"# Review\n\n> Reviewer: OpenRouter `{sys.argv[3]}` · "
        f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')} · "
        f"tokens in={u.get('prompt_tokens','?')} out={u.get('completion_tokens','?')}\n"
-       f"> Prompt: {sys.argv[4]} · Verbatim model output below — do not edit.\n\n")
+       f"> Prompt: {os.path.basename(sys.argv[4])} · Verbatim model output below — do not edit.\n\n")
 open(sys.argv[2], "w").write(hdr + txt + "\n")
 verdict = [l for l in txt.splitlines() if l.strip().startswith("VERDICT:")]
 print(verdict[-1].strip() if verdict else "NO VERDICT LINE — treat as REVISE")

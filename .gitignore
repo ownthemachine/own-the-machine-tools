@@ -1,3 +1,6 @@
 .env
 .env.*
+# the template carries no secret and has to ship, or the README tells people
+# to copy a file that is not in the repository
+!.env.example
 __pycache__/

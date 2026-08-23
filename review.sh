@@ -12,10 +12,17 @@
 #                       REVIEW_BASE_URL is pointed back at OpenRouter)
 #   REVIEW_BASE_URL    default https://router.eu.requesty.ai/v1
 #   REVIEW_MODEL       default vertex/gemini-3.7-flash@eu
-#   REVIEW_REQUIRE_EU  default 1. Refuses to run unless the router itself
-#                      reports the model as EU-hosted, zero-retention and not
-#                      trained on. Set to 0 only with a reason you can write
-#                      down, because every review record claims this.
+#   REVIEW_VERIFY      default 1. Read the router's own model metadata and
+#                      refuse to run unless it satisfies the requirements
+#                      below. 0 skips verification entirely, and the review
+#                      record then claims nothing about jurisdiction.
+#   REVIEW_REQUIRE_EU          default 1  geolocation must be eu
+#   REVIEW_REQUIRE_ZDR         default 1  retention must be 0 days
+#   REVIEW_REQUIRE_NO_TRAINING default 1  text must not be trained on
+#                      Three separate switches so that relaxing one does not
+#                      silently drop the other two. The provenance line always
+#                      reports what the router said, so a relaxed run is
+#                      visible in every verdict it produced.
 # A .env beside this script is loaded if present, so the key stays out of the
 # shell history and out of the repository (.env is gitignored).
 set -euo pipefail
@@ -27,7 +34,7 @@ IN="${1:?usage: review.sh <input.md> <output.md> <prompt.md>}"
 OUT="${2:?}"; PROMPT="${3:?}"
 BASE="${REVIEW_BASE_URL:-https://router.eu.requesty.ai/v1}"
 MODEL="${REVIEW_MODEL:-vertex/gemini-3.7-flash@eu}"
-REQUIRE_EU="${REVIEW_REQUIRE_EU:-1}"
+VERIFY="${REVIEW_VERIFY:-1}"
 KEY="${REVIEW_API_KEY:-${REQUESTY_API_KEY:-${OPENROUTER_API_KEY:-}}}"
 [[ -f "$IN" && -f "$PROMPT" ]] || { echo "missing input or prompt" >&2; exit 1; }
 [[ -n "$KEY" ]] || { echo "no API key: set REQUESTY_API_KEY (see README)" >&2; exit 1; }
@@ -40,7 +47,7 @@ chmod 600 "$CFG"; printf 'header = "Authorization: Bearer %s"\n' "$KEY" > "$CFG"
 # The router publishes geolocation and retention per model. Read it, prove the
 # claim before spending tokens, and carry what it said into the review record.
 PROV="router $(printf '%s' "$BASE" | sed -E 's#https?://([^/]+).*#\1#')"
-if [[ "$REQUIRE_EU" == "1" ]]; then
+if [[ "$VERIFY" == "1" ]]; then
   curl -sS --max-time 120 -K "$CFG" -o "$META" "$BASE/models" || {
     echo "could not read $BASE/models to verify EU routing" >&2; exit 1; }
   PROV=$(python3 - "$META" "$MODEL" "$BASE" <<'PY'
@@ -54,14 +61,28 @@ if m is None:
 geo = str(m.get('geolocation', '')).lower()
 days = m.get('data_retention_days')
 trained = m.get('data_used_for_training')
+import os
+want = lambda k: os.environ.get(k, '1') == '1'
+# Three separable guarantees, so that relaxing one does not silently drop the
+# others. Region is the thesis. Training use is the principle: a proposal about
+# capital formed out of other people's inputs without their consent should not
+# hand its own text over for training. Retention is hygiene, and this corpus is
+# published anyway, so it is the one that can defensibly be relaxed.
 bad = []
-if geo != 'eu': bad.append(f"geolocation={geo or 'unknown'}")
-if days not in (0, '0'): bad.append(f"retention_days={days}")
-if trained not in (False, 'false', None): bad.append(f"trained_on={trained}")
+if want('REVIEW_REQUIRE_EU') and geo != 'eu':
+    bad.append(f"geolocation={geo or 'unknown'}")
+if want('REVIEW_REQUIRE_ZDR') and days not in (0, '0'):
+    bad.append(f"retention_days={days}")
+# unknown is not a pass: a router that does not say must not be taken to mean no
+if want('REVIEW_REQUIRE_NO_TRAINING') and trained not in (False, 'false'):
+    bad.append(f"trained_on={'unknown' if trained is None else trained}")
 if bad:
-    sys.exit("refusing to run: " + ", ".join(bad)
-             + ". The review record would claim EU zero-retention routing.")
+    sys.exit("refusing to run: " + ", ".join(bad) + ". The review record would "
+             "claim a guarantee this model does not offer. Relax the specific "
+             "requirement deliberately (see README) rather than all of them.")
 host = base.split('//')[-1].split('/')[0]
+# The line reports what the router actually said, never what was required, so a
+# relaxed run is visible in every verdict it produces.
 print(f"router {host} · geolocation {geo} · retention {days}d · "
       f"trained-on {str(trained).lower()} · lab {m.get('model_lab', '?')}")
 PY

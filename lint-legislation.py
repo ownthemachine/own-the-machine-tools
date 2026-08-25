@@ -37,10 +37,15 @@ def legal_part(f, text):
         return text.split("\n---\n")[0]
     return text
 
-def is_external_ref(line, m):
+def is_external_ref(line, m, next_line=""):
     if int(m.group(1)) > 40:      # no internal article number runs that high
         return True
-    ctx = line[max(0, m.start() - 70):m.start()] + " | " + line[m.end():m.end() + 45]
+    # the context window crosses the line break, because prose is hard-wrapped
+    # and "Article 34 of\nthe Charter" is one reference, not two lines; a
+    # line-bound check here is the same wrap-sensitivity bug that once broke
+    # the constraints table
+    tail = (line[m.end():] + " " + next_line)[:45]
+    ctx = line[max(0, m.start() - 70):m.start()] + " | " + tail
     return bool(EXTERNAL.search(ctx))
 
 for f in targets:
@@ -74,9 +79,11 @@ if art_dir.exists():
             if REG not in f.parents:
                 continue
             txt = f.read_text(errors="replace")
-            for i, line in enumerate(legal_part(f, txt).splitlines(), 1):
+            _lines = legal_part(f, txt).splitlines()
+            for i, line in enumerate(_lines, 1):
                 for m in re.finditer(r"Article (\d+)", line):
-                    if int(m.group(1)) not in nums and not is_external_ref(line, m):
+                    nxt = _lines[i] if i < len(_lines) else ""
+                    if int(m.group(1)) not in nums and not is_external_ref(line, m, nxt):
                         errors.append(
                             f"{f.relative_to(ROOT)}:{i}  dangling reference to Article {m.group(1)}"
                         )

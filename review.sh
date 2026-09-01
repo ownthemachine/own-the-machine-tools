@@ -12,6 +12,8 @@
 #                       REVIEW_BASE_URL is pointed back at OpenRouter)
 #   REVIEW_BASE_URL    default https://router.eu.requesty.ai/v1
 #   REVIEW_MODEL       default vertex/gemini-3.7-flash@eu
+#   REVIEW_TIMEOUT     default 1800 (seconds per request; reasoning-tier
+#                      models on long adversarial prompts exceed 600)
 #   REVIEW_VERIFY      default 1. Read the router's own model metadata and
 #                      refuse to run unless it satisfies the requirements
 #                      below. 0 skips verification entirely, and the review
@@ -104,8 +106,15 @@ print(json.dumps(body))
 PY
 }
 call() {
-  curl -sS --max-time 600 -K "$CFG" -H "Content-Type: application/json" \
-    -o "$RESP" -w '%{http_code}' -d @"$TMP" "$BASE/chat/completions" || echo 000
+  # curl -w prints a code even when the transfer fails, and a fallback echo
+  # would append a second one ("000000"), which the retry test below can
+  # never match. Sanitise to exactly one three-digit code whatever happens.
+  local code
+  code=$(curl -sS --max-time "${REVIEW_TIMEOUT:-1800}" --connect-timeout 30 \
+    -K "$CFG" -H "Content-Type: application/json" \
+    -o "$RESP" -w '%{http_code}' -d @"$TMP" "$BASE/chat/completions") || true
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+  printf '%s' "$code"
 }
 build_body with
 HTTP=$(call)
@@ -114,9 +123,11 @@ if [[ "$HTTP" == "400" ]] && grep -qi 'temperature' "$RESP"; then
   build_body without
   HTTP=$(call)
 fi
-if [[ "$HTTP" == "429" || "$HTTP" =~ ^5 || "$HTTP" == "000" ]]; then
-  sleep 20; HTTP=$(call)
-fi
+for backoff in 20 60; do
+  [[ "$HTTP" == "429" || "$HTTP" =~ ^5 || "$HTTP" == "000" ]] || break
+  echo "note: HTTP $HTTP from $MODEL, retrying in ${backoff}s" >&2
+  sleep "$backoff"; HTTP=$(call)
+done
 [[ "$HTTP" == "200" ]] || { echo "review HTTP $HTTP from $BASE" >&2; head -c 400 "$RESP" >&2; exit 1; }
 python3 - "$RESP" "$OUT" "$MODEL" "$PROMPT" "$PROV" <<'PY'
 import json, sys, os, datetime
@@ -127,7 +138,15 @@ hdr = (f"# Review\n\n> Reviewer: `{sys.argv[3]}` · {sys.argv[5]}\n"
        f"tokens in={u.get('prompt_tokens','?')} out={u.get('completion_tokens','?')}\n"
        f"> Prompt: {os.path.basename(sys.argv[4])} · Verbatim model output below — do not edit.\n\n")
 open(sys.argv[2], "w").write(hdr + txt + "\n")
-verdict = [l for l in txt.splitlines() if l.strip().startswith("VERDICT:")]
-print(verdict[-1].strip() if verdict else "NO VERDICT LINE — treat as REVISE")
+# Models sometimes emphasise the line ("**VERDICT: PUBLISH**"); a plain
+# startswith would then read a pass as no verdict at all. Strip emphasis
+# on both sides before matching.
+import re as _re
+v = []
+for line in txt.splitlines():
+    s = _re.sub(r"^[\s>*_#`-]+", "", line).strip()
+    if s.upper().startswith("VERDICT:"):
+        v.append(_re.sub(r"[\s*_`]+$", "", s))
+print(v[-1] if v else "NO VERDICT LINE — treat as REVISE")
 PY
 echo "review written: $OUT"
